@@ -30,7 +30,7 @@
 #include "common/CtaCommon.hh"
 #include "common/IoPriority.hh"
 #include "common/xrootd-ssi-protobuf-interface/eos_cta/include/CtaFrontendApi.hpp"
-#include "fst/FmdDbMap.hh"
+#include "fst/filemd/FmdDbMap.hh"
 #include "fst/layout/Layout.hh"
 #include "fst/layout/LayoutPlugin.hh"
 #include "fst/checksum/ChecksumPlugins.hh"
