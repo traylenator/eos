@@ -431,6 +431,7 @@ public:
 
   void DoVerify(XrdOucEnv& env);
 
+  bool FmdOnDb() const;
 private:
 #ifdef IN_TEST_HARNESS
 public:
