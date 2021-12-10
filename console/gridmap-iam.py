@@ -62,7 +62,7 @@ class IAM_Server:
             "scope": "scim:read"
         }
         now = datetime.now()
-
+        
         response = request.urlopen(f'https://{self.token_server}{self.TOKEN_ENDPOINT}', data=parse.urlencode(request_data).encode('utf-8'))
         response = json.loads(response.read())
 
@@ -70,7 +70,7 @@ class IAM_Server:
             raise BaseException("Authentication Failed")
         response['request_time'] = now
         self._token = response
-
+    
     @property
     def token(self):
         """
@@ -86,7 +86,8 @@ class IAM_Server:
         Each batch can be up to 100 records so the requests are parallelized
         """
         # Get's a new token if expired
-        header = {"Authorization": f"Bearer {self.token}"}
+        header = {"Authorization": f"Bearer {self.token}"} 
+
         users_so_far = 0
         startIndex = 0
         params = {"startIndex": startIndex, "count": count}
@@ -96,8 +97,8 @@ class IAM_Server:
         req = request.Request(f"https://{self.server}{self.USER_ENDPOINT}?{parse.urlencode(params)}", headers=header)
         response = request.urlopen(req)
         response = json.loads(response.read())
-
-        users_dn = set()
+        
+        users_dn = set() 
         # We can use a with statement to ensure threads are cleaned up promptly
         with ThreadPoolExecutor(max_workers=int(response['totalResults']/100)) as executor:
             # Start the load operations and mark each future with its URL
@@ -136,12 +137,7 @@ class IAM_Server:
                 for cert in certs:
                     # Revert subjectDn and replace , with /
                     grid_dn = '/'.join(cert["subjectDn"].split(',')[::-1])
-<<<<<<< HEAD
-                    if pattern is None or pattern.search(grid_dn):
-                        # Revert subjectDn and replace , with /
-=======
                     if pattern is None or pattern.search(grid_dn): 
->>>>>>> Improve gridmap generation script
                         matching_dn.add(f'/{grid_dn}')
             except KeyError:
                 logging.warning(f"User {user['id']} doesn't have certificate to extract info (skipping it)")
@@ -150,61 +146,14 @@ class IAM_Server:
         return matching_dn
 
 
-<<<<<<< HEAD
-def main(server = None, credentials = None, account=None, ifile=None, ofile=None, pattern=None, sensitive=0, debug_level=logging.WARNING):
-    """
-    Configure IAM servers to be queried, update/write gridmap file format
-    """
-    logging.basicConfig(level=debug_level)
-    try:
-        pattern = re.compile(pattern, flags=sensitive)
-    except:
-        if pattern is not None:
-            logging.critical(f'Pattern provided cannot be compiled: {pattern}')
-            return
-    # Credentials file might have server on the section
-    if credentials is None:
-        logging.error("IAM server credentials not provided")
-
-        if server is None:
-            logging.error("IAM server")
-        return
-
-    iam_servers = set()
-    config = ConfigParser()
-    files_read = config.read(credentials)
-    if len(files_read) > 0:
-        if server is not None:
-            it = filter(lambda x: True if server in x else False, config.sections())
-        else:
-            it = config.sections()
-
-        for section in it:
-            server = section
-            client_id = config.get(section,'client-id')
-            client_secret = config.get(section,'client-secret')
-            # Assuming token server is the same as IAM's
-            token_server = server
-            iam_servers.add(IAM_Server(server, client_id, client_secret, token_server))
-    else:
-        logging.error("Credentials couldn't be loaded")
-        return
-
-    # Query IAM server
-    users_dn = set()
-    for iam in iam_servers:
-        users_dn.update(iam.get_users(filter_function=iam.dn_filter, pattern=pattern, sensitive=sensitive, count=100))
-
-=======
 def buildgridmap(users_dn, account, ifile, ofile):
->>>>>>> Improve gridmap generation script
     grid_map = {}
     if ifile:
         # As some entries may be encoded in latin let's escape it as unicode
         with open(ifile, "r", encoding='unicode_escape') as igridmap_file:
             for dn,acc in (l.rsplit(' ',1) for l in igridmap_file.readlines()):
                 grid_map[dn] = acc.strip()
-
+    
     # Overwrite / append results
     for dn in users_dn:
         if dn in grid_map:
@@ -213,17 +162,11 @@ def buildgridmap(users_dn, account, ifile, ofile):
 
     content = '\n'.join(f'{dn} {acc}' for dn, acc in grid_map.items())
     if ofile:
-        try:
+        try: 
             with open(ofile, "w", encoding='utf-8') as ogridmap_file:
                 ogridmap_file.write(content)
         except Exception as e:
             logging.error(f'Unable to write to {ofile}, raised exception {e}')
-<<<<<<< HEAD
-        return
-
-    print(content)
-
-=======
             exit(4)
     
     print(content)
@@ -292,7 +235,6 @@ def main(server = None, credentials=None, targets = None, account=None, ifile=No
 
     # Update/Write gridmap file
     buildgridmap(users_dn, account, ifile, ofile)
->>>>>>> Improve gridmap generation script
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GRID Map file generation from IAM Server')
@@ -303,7 +245,7 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--inputfile', dest = 'ifile', default=None, help = "Path to existing gridmapfile to be updated (matching DN's will be overwritten)")
     parser.add_argument('-o', '--outfile', dest = 'ofile', default=None, help = 'Path to dump gridmapfile')
     parser.add_argument('-a', '--account', dest = 'account', required=True, help = 'Account to which the result from the match should be mapped to')
-
+    
     parser.add_argument('-C','--case-sensitive', dest='sensitive',action='store_const', const=0, default=re.IGNORECASE, help = 'Pattern to search on user certificates `subject DN` field')
     parser.add_argument('-p', '--pattern', type=str, dest = 'pattern', default=None, help = 'Pattern to search on user certificates `subject DN` field')
     parser.add_argument('-u', '--prefer-cern-certs', dest = 'prefer_cern',action='store_true', help = 'Prefers CERN.CH certificates (if any) to map user (uniquely)')
