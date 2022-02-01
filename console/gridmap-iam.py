@@ -24,6 +24,7 @@
 
 import re
 import json
+import pickle
 import logging
 import argparse
 from sys import exit
@@ -98,28 +99,41 @@ class IAM_Server:
         response = request.urlopen(req)
         response = json.loads(response.read())
         
-        users_dn = set() 
+        users = set() 
         # We can use a with statement to ensure threads are cleaned up promptly
-        with ThreadPoolExecutor(max_workers=int(response['totalResults']/100)) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             # Start the load operations and mark each future with its URL
             reqs = []
-            for start_index in range(0,response['totalResults'],100):
+            for start_index in range(0,response['totalResults'],count):
                 params["startIndex"] = start_index
+
                 # Get's a new token if expired
                 header["Authorization"] = f"Bearer {self.token}"
                 req = request.Request(f"https://{self.server}{self.USER_ENDPOINT}?{parse.urlencode(params)}", headers=header)
                 reqs.append(executor.submit(request.urlopen, req))
 
+                logging.debug(f"https://{self.server}{self.USER_ENDPOINT}?{parse.urlencode(params)}  with headers: {header}")
             for req in as_completed(reqs):
                 try:
                     response=req.result()
-                except Exception as e:
-                    print(f'{req} generated an exception: {e}')
-                else:
                     response = json.loads(response.read())
-                    users_dn.update(filter_function(*response['Resources'], **kwargs))
+                    if filter_function is not None:
+                        users.update(filter_function(*response['Resources'], **kwargs))
+                except Exception as e:
+                    logging.error(f'{req} generated an exception: {e}')
 
-        return users_dn
+        return users
+
+    def name_map_filter(self, *users, kwargs=None):
+        """
+        Collect user's id to build 'Mapfile format' rules:
+        https://github.com/xrootd/xrootd/tree/master/src/XrdSciTokens
+        """
+        logging.debug(f"This request has {len(users)}")
+        ids=set()
+        
+        return set((user.get('id') for user in users if user.get('id') is not None))
+
 
     def dn_filter(self, *users, pattern=None, sensitive=0, prefer_cern=False):
         """
@@ -145,15 +159,43 @@ class IAM_Server:
         logging.info(f"{len(matching_dn)} matching certificates")
         return matching_dn
 
+def buildnamemapfile(users_id, account, ifile, ofile):
+    name_map=set() # serialized dictionary!
+    if ifile:
+        try:
+            with open(ifile) as f:
+                for entry in json.load(f):
+                    name_map.add(pickle.dumps(entry))
+        except FileNotFoundError as e:
+            logging.error(f"Unable to read {ifile}, ignoring it's content...")
+            exit(4)
+
+    for id in users_id:
+        name_map.add(pickle.dumps({'sub':id,'result':account}))
+    
+    
+    if ofile:
+        try: 
+            with open(ofile,'w') as f:
+                json.dump([pickle.loads(rule) for rule in name_map],f)
+        except Exception as e:
+            logging.error(f'Unable to write to {ofile}, raised exception {e}')
+            exit(4)
+    else:
+        print(json.dumps(name_map))
 
 def buildgridmap(users_dn, account, ifile, ofile):
     grid_map = {}
     if ifile:
-        # As some entries may be encoded in latin let's escape it as unicode
-        with open(ifile, "r", encoding='unicode_escape') as igridmap_file:
-            for dn,acc in (l.rsplit(' ',1) for l in igridmap_file.readlines()):
-                grid_map[dn] = acc.strip()
-    
+        try:
+            # As some entries may be encoded in latin let's escape it as unicode
+            with open(ifile, "r", encoding='unicode_escape') as igridmap_file:
+                for dn,acc in (l.rsplit(' ',1) for l in igridmap_file.readlines()):
+                    grid_map[dn] = acc.strip()
+        except FileNotFoundError as e:
+            logging.error(f"Unable to read {ifile}, ignoring it's content...")
+            exit(4)
+
     # Overwrite / append results
     for dn in users_dn:
         if dn in grid_map:
@@ -168,8 +210,8 @@ def buildgridmap(users_dn, account, ifile, ofile):
         except Exception as e:
             logging.error(f'Unable to write to {ofile}, raised exception {e}')
             exit(4)
-    
-    print(content)
+    else:
+        print(content)
 
 
 def configure(credentials, servers, targets):
@@ -213,7 +255,7 @@ def configure(credentials, servers, targets):
         logging.error('Configuration problem! Configuration file not loaded (correctly?), environment not set, arguments not passed')
         exit(3)
     
-def main(server = None, credentials=None, targets = None, account=None, ifile=None, ofile=None, pattern=None, sensitive=0, debug_level=logging.WARNING, prefer_cern=False):
+def main(server = None, credentials=None, targets = None, account=None, ifile=None, ofile=None, pattern=None, sensitive=0, debug_level=logging.WARNING, prefer_cern=False, type_of_format="GRIDMAP"):
     """
     Configure IAM servers to be queried, update/write gridmap file format
     """
@@ -229,12 +271,20 @@ def main(server = None, credentials=None, targets = None, account=None, ifile=No
     iam_servers = configure(credentials, server, targets)
     
     # Query IAM server
-    users_dn = set()
+    users = set()
     for iam in iam_servers:
-        users_dn.update(iam.get_users(filter_function=iam.dn_filter, pattern=pattern, sensitive=sensitive, count=100, prefer_cern=prefer_cern))
+        if type_of_format == "GRIDMAP":
+            users.update(iam.get_users(count=100, filter_function=iam.dn_filter, pattern=pattern, sensitive=sensitive, prefer_cern=prefer_cern))
+        elif type_of_format == "MAPFILE":
+            users.update(iam.get_users(count=100, filter_function=iam.name_map_filter))
+
 
     # Update/Write gridmap file
-    buildgridmap(users_dn, account, ifile, ofile)
+    if type_of_format == "GRIDMAP":
+        buildgridmap(users, account, ifile, ofile)
+    elif type_of_format == "MAPFILE":
+        buildnamemapfile(users, account, ifile, ofile)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GRID Map file generation from IAM Server')
@@ -250,8 +300,10 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--pattern', type=str, dest = 'pattern', default=None, help = 'Pattern to search on user certificates `subject DN` field')
     parser.add_argument('-u', '--prefer-cern-certs', dest = 'prefer_cern',action='store_true', help = 'Prefers CERN.CH certificates (if any) to map user (uniquely)')
 
+    parser.add_argument('-f', '--format',  type = str.upper, nargs='?', const="MAPFILE", default="GRIDMAP", choices=("MAPFILE","GRIDMAP"),dest='type_of_format', help = 'Choose file format, using DN or ID (defaults to ID if used, else DN)')
+
     args = parser.parse_args()
 
     logging.basicConfig(level=eval(f"logging.{args.debug}"))
     logging.debug(args)
-    main(server=args.server, credentials=args.credentials, targets=args.targets, ifile=args.ifile, ofile=args.ofile, account=args.account, pattern=args.pattern, sensitive=args.sensitive, debug_level=logging.DEBUG, prefer_cern=args.prefer_cern )
+    main(server=args.server, credentials=args.credentials, targets=args.targets, ifile=args.ifile, ofile=args.ofile, account=args.account, pattern=args.pattern, sensitive=args.sensitive, debug_level=logging.DEBUG, prefer_cern=args.prefer_cern, type_of_format=args.type_of_format)
