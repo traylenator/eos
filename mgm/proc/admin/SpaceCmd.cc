@@ -687,12 +687,12 @@ void SpaceCmd::ConfigSubcmd(const eos::console::SpaceProto_ConfigProto& config,
 
         if (GroupBalancer::is_valid_engine(value)) {
           if (!FsView::gFsView.mSpaceView[config.mgmspace_name()]->SetConfigMember(key,
-                                                                                 value)) {
+              value)) {
             std_err.str("error: cannot set space config value");
             ret_c = EIO;
           } else {
             std_out.str("success: configured groupbalancer.engine in space='" +
-                        config.mgmspace_name() +"' as "+ key + "='" + value + "'\n");
+                        config.mgmspace_name() + "' as " + key + "='" + value + "'\n");
             ret_c = 0;
           }
         } else {
@@ -705,6 +705,7 @@ void SpaceCmd::ConfigSubcmd(const eos::console::SpaceProto_ConfigProto& config,
             (key == "graceperiod") ||
             (key == "drainperiod") ||
             (key == "balancer") ||
+            (key == "balancer.threshold") ||
             (key == "balancer.node.rate") ||
             (key == "balancer.node.ntx") ||
             (key == "drainer.node.rate") ||
@@ -742,7 +743,6 @@ void SpaceCmd::ConfigSubcmd(const eos::console::SpaceProto_ConfigProto& config,
             (key == eos::mgm::tgc::TGC_NAME_AVAIL_BYTES) ||
             (key == eos::mgm::tgc::TGC_NAME_TOTAL_BYTES) ||
             (key == "token.generation") ||
-            (key == "balancer.threshold") ||
             (key == eos::common::SCAN_IO_RATE_NAME) ||
             (key == eos::common::SCAN_ENTRY_INTERVAL_NAME) ||
             (key == eos::common::SCAN_DISK_INTERVAL_NAME) ||
@@ -1208,7 +1208,8 @@ void SpaceCmd::InspectorSubcmd(const eos::console::SpaceProto_InspectorProto&
   reply.set_retc(0);
 }
 
-void SpaceCmd::GroupBalancerSubCmd(const eos::console::SpaceProto_GroupBalancerProto& groupbalancer,
+void SpaceCmd::GroupBalancerSubCmd(const
+                                   eos::console::SpaceProto_GroupBalancerProto& groupbalancer,
                                    eos::console::ReplyProto& reply)
 {
   if (groupbalancer.mgmspace().empty()) {
@@ -1217,37 +1218,39 @@ void SpaceCmd::GroupBalancerSubCmd(const eos::console::SpaceProto_GroupBalancerP
   }
 
   auto space_it = FsView::gFsView.mSpaceView.find(groupbalancer.mgmspace());
+
   if (space_it == FsView::gFsView.mSpaceView.end()) {
     reply.set_std_err("error: No such space exists!");
     reply.set_retc(EINVAL);
     return;
   }
+
   const auto fs_space = space_it->second;
 
   switch (groupbalancer.cmd_case()) {
   case eos::console::SpaceProto_GroupBalancerProto::kStatus:
     GroupBalancerStatusCmd(groupbalancer.status(), reply, fs_space);
     break;
+
   default:
     reply.set_std_err("error: not supported");
     reply.set_retc(EINVAL);
   }
-
 }
 
-void SpaceCmd::GroupBalancerStatusCmd(const eos::console::SpaceProto_GroupBalancerStatusProto& status,
+void SpaceCmd::GroupBalancerStatusCmd(const
+                                      eos::console::SpaceProto_GroupBalancerStatusProto& status,
                                       eos::console::ReplyProto& reply,
                                       FsSpace* const fs_space)
 {
-
   if (fs_space == nullptr || fs_space->mGroupBalancer == nullptr) {
     reply.set_std_err("Invalid space/GroupBalancer config");
     reply.set_retc(EINVAL);
     return;
   }
+
   bool monitoring = status.options().find('m') != std::string::npos;
   bool detail = status.options().find('d') != std::string::npos;
-
   reply.set_std_out(fs_space->mGroupBalancer->Status(detail, monitoring));
   reply.set_retc(0);
 }

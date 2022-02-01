@@ -51,6 +51,21 @@ EOSMGMNAMESPACE_BEGIN
 FsView FsView::gFsView;
 std::atomic<bool> FsSpace::gDisableDefaults {false};
 
+
+//------------------------------------------------------------------------------
+// Check if given heartbeat timestamp is recent enough
+//------------------------------------------------------------------------------
+inline bool isHeartbeatRecent(time_t heartbeatTime)
+{
+  time_t now = time(NULL);
+
+  if ((now - heartbeatTime) < 60) {
+    return true;
+  }
+
+  return false;
+}
+
 //------------------------------------------------------------------------------
 // Destructor - destructs all the branches starting at this node
 //------------------------------------------------------------------------------
@@ -3144,6 +3159,79 @@ FsView::CollectEndpoints(const std::string& queue) const
   return endpoints;
 }
 
+//------------------------------------------------------------------------------
+// Get set of unbalanced groups given the threshold
+//------------------------------------------------------------------------------
+std::map<std::string, double>
+FsView::GetUnbalancedGroups(const std::string& space_name,
+                            double threshold) const
+{
+  static const std::string metric = "stat.statfs.filled";
+  std::map<std::string, double> unbalanced;
+  eos::common::RWMutexReadLock fs_rd_lock(ViewMutex);
+  auto it = mSpaceGroupView.find(space_name);
+
+  if (it == mSpaceGroupView.end()) {
+    return unbalanced;
+  }
+
+  const auto& set_groups = it->second;
+
+  for (auto* group : set_groups) {
+    double dev = group->MaxAbsDeviation(metric.c_str(), false);
+
+    if (dev > threshold) {
+      unbalanced.emplace(group->mName, dev);
+    }
+  }
+
+  return unbalanced;
+}
+
+//------------------------------------------------------------------------------
+// Get sets of file systems from given group which are above/below the average
+// given the threshold
+//------------------------------------------------------------------------------
+FsPrioritySets
+FsView::GetFsToBalance(const std::string& group_name, double threshold) const
+{
+  static const std::string metric = "stat.statfs.filled";
+  std::set<FsBalanceInfo> prio_fs_above, fs_above, fs_below, prio_fs_below;
+  eos::common::RWMutexReadLock fs_rd_lock(ViewMutex);
+  const auto it = mGroupView.find(group_name);
+
+  if ((it == mGroupView.end()) || (mGroupView.size() == 1)) {
+    return std::make_tuple(prio_fs_below, fs_below, fs_above, prio_fs_above);;
+  }
+
+  auto* group = it->second;
+  double average = group->AverageDouble(metric.c_str(), false);
+
+  for (auto it_fs = group->begin(); it_fs != group->end(); ++it_fs) {
+    auto* fs = mIdView.lookupByID(*it_fs);
+
+    if (fs && BaseView::ConsiderForStatistics(fs)) {
+      const std::string node_host = fs->getCoreParams().getHost();
+      double fs_filled = fs->GetDouble(metric.c_str());
+
+      if (fs_filled < average) {
+        if (average - fs_filled > threshold) {
+          prio_fs_below.emplace(*it_fs, node_host, fs_filled);
+        } else {
+          fs_below.emplace(*it_fs, node_host, fs_filled);
+        }
+      } else {
+        if (fs_filled - average > threshold) {
+          prio_fs_above.emplace(*it_fs, node_host, fs_filled);
+        } else {
+          fs_above.emplace(*it_fs, node_host, fs_filled);
+        }
+      }
+    }
+  }
+
+  return std::make_tuple(prio_fs_below, fs_below, fs_above, prio_fs_above);
+}
 
 //------------------------------------------------------------------------------
 // Should the provided fsid participate in statistics calculations?
@@ -3153,7 +3241,7 @@ FsView::CollectEndpoints(const std::string& queue) const
 //
 // Call with fsview lock at-least-read locked.
 //------------------------------------------------------------------------------
-bool BaseView::ShouldConsiderForStatistics(FileSystem* fs)
+bool BaseView::ConsiderForStatistics(FileSystem* fs)
 {
   if (!fs) {
     return false;
@@ -3323,7 +3411,7 @@ BaseView::AverageDouble(const char* param, bool lock,
     }
 
     if (mType == "groupview") {
-      consider = ShouldConsiderForStatistics(fs);
+      consider = ConsiderForStatistics(fs);
     }
 
     if (consider) {
@@ -3362,7 +3450,7 @@ BaseView::MaxAbsDeviation(const char* param, bool lock,
     }
 
     if (mType == "groupview") {
-      consider = ShouldConsiderForStatistics(fs);
+      consider = ConsiderForStatistics(fs);
     }
 
     if (consider) {
@@ -3405,7 +3493,7 @@ BaseView::MaxDeviation(const char* param, bool lock,
     }
 
     if (mType == "groupview") {
-      consider = ShouldConsiderForStatistics(fs);
+      consider = ConsiderForStatistics(fs);
     }
 
     if (consider) {
@@ -3421,7 +3509,7 @@ BaseView::MaxDeviation(const char* param, bool lock,
 }
 
 //------------------------------------------------------------------------------
-// Computes the maximum deviation of <param> from the avg of <param>
+// Computes the minimum deviation of <param> from the avg of <param>
 //------------------------------------------------------------------------------
 double
 BaseView::MinDeviation(const char* param, bool lock,
@@ -3447,7 +3535,7 @@ BaseView::MinDeviation(const char* param, bool lock,
     }
 
     if (mType == "groupview") {
-      consider = ShouldConsiderForStatistics(fs);
+      consider = ConsiderForStatistics(fs);
     }
 
     if (consider) {
@@ -3489,7 +3577,7 @@ BaseView::SigmaDouble(const char* param, bool lock,
     }
 
     if (mType == "groupview") {
-      consider = ShouldConsiderForStatistics(fs);
+      consider = ConsiderForStatistics(fs);
     }
 
     if (consider) {
@@ -3527,7 +3615,7 @@ BaseView::ConsiderCount(bool lock,
     }
 
     if (mType == "groupview") {
-      consider = ShouldConsiderForStatistics(fs);
+      consider = ConsiderForStatistics(fs);
     }
 
     if (consider) {
